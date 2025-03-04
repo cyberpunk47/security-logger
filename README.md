@@ -98,7 +98,7 @@ sudo systemctl status seclog.service         # Verify status
    - If the issue persists, run the application in terminal mode (`security_logger.py`).
 2. **GUI Crashes**:
    - The GUI is a **work-in-progress** and may crash on unsupported systems or configurations.
-   - Check the terminal for error messages and report them in the [Issues](https://github.com/yourusername/security-event-logger/issues) section.
+   - Check the terminal for error messages and report them in the [Issues](https://github.com/cyberpunk47/security-event-logger/issues) section.
 3. **Limited Features**:
    - The GUI currently supports basic event viewing and filtering. Advanced features (e.g., real-time alerts) are only available in terminal mode.
 ### Terminal Issues
