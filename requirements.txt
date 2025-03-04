@@ -1,0 +1,4 @@
+psutil
+watchdog
+systemd-python
+tkinter
