@@ -200,6 +200,7 @@ sudo systemctl status seclog.service         # Verify status
 ## Maintainers
 - [Yasir Hameed](https://github.com/cyberpunk47) (Developer)
 - [Md Aquib Raza](https://github.com/razaaquib99) (Developer)
+- [Ansh Deshwal](https://github.com/anshdeshwal31) (Developer)
 ---
 ## Contributing
 1. Fork the repository.
