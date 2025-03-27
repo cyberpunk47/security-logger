@@ -1,0 +1,26 @@
+{
+    "T1078": [
+        "USER_LOGIN_SUCCESS",
+        "USER_CREATED"
+    ],
+    "T1110": [
+        "USER_LOGIN_FAILURE"
+    ],
+    "T1083": [
+        "FILE_ACCESS",
+        "FILE_CREATED",
+        "FILE_DELETED"
+    ],
+    "T1059": [
+        "SUSPICIOUS_COMMAND"
+    ],
+    "T1068": [
+        "PRIVILEGE_ESCALATION"
+    ],
+    "T1040": [
+        "NETWORK_CONNECTION"
+    ],
+    "T1053": [
+        "PROCESS_CREATED"
+    ]
+}

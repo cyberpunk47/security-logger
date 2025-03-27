@@ -1,10 +1,13 @@
 import re
 import time
-from systemd import journal  # Add this import
 from .base_monitor import BaseMonitor
 
-# Define HAS_SYSTEMD
-HAS_SYSTEMD = True  # Add this line
+# Make systemd import optional
+try:
+    from systemd import journal
+    HAS_SYSTEMD = True
+except ImportError:
+    HAS_SYSTEMD = False
 
 class JournaldMonitor(BaseMonitor):
     """Monitor systemd journal for security events."""

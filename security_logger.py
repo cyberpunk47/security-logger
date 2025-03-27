@@ -20,6 +20,7 @@ import configparser
 import sqlite3
 from typing import Dict, List, Any, Optional, Union
 import tempfile
+import getpass  # Add missing import
 
 # Import monitor classes from the monitors package
 from monitors import (
@@ -35,12 +36,19 @@ from monitors import (
 # Import EventDatabase
 from event_database import EventDatabase  # Add this import
 
+# Add this import at the top
+from PyQt5.QtCore import QObject, pyqtSignal
+
 # Function to check and install required dependencies
 def check_and_install_dependencies():
     required_packages = {
         "psutil": "psutil",
         "watchdog": "watchdog",
-        "systemd-python": "systemd"
+        "systemd-python": "systemd",
+        "PyQt5": "PyQt5",
+        "matplotlib": "matplotlib",
+        "pandas": "pandas",
+        "python-dateutil": "dateutil", 
     }
     
     # Check which packages need to be installed
@@ -52,7 +60,7 @@ def check_and_install_dependencies():
             missing_packages.append(package_name)
     
     # Install missing packages if any
-    if missing_packages:
+    if (missing_packages):
         print(f"Installing missing dependencies: {', '.join(missing_packages)}")
         try:
             # Try using pip in user mode first (no admin required)
@@ -96,8 +104,11 @@ except Exception as e:
     print(f"Error setting up dependencies: {e}")
     sys.exit(1)
 
-class SecurityEventLogger:
+class SecurityEventLogger(QObject):
     """Main class for Windows-style security event logging on Linux."""
+    
+    # Add a PyQt signal for new events
+    new_event = pyqtSignal(dict)
     
     # Windows Event Log-inspired event types
     EVENT_TYPES = {
@@ -151,12 +162,18 @@ class SecurityEventLogger:
         "SUSPICIOUS_COMMAND": "9003"
     }
     
-    def __init__(self, config_file=None):
+    def __init__(self, config_file=None, gui_mode=False):
         """Initialize the security event logger with configuration."""
+        # Initialize QObject first
+        super(SecurityEventLogger, self).__init__()
+        
+        # Set GUI mode
+        self.gui_mode = gui_mode
+        
         self.config = self.load_config(config_file)
         
-        # Set up database
-        db_path = self.config.get('database', {}).get('path', '/var/log/securityevents.db')
+        # Set up database in home directory by default
+        db_path = self.config.get('database', {}).get('path', os.path.expanduser('~/.local/share/securityevents.db'))
         self.ensure_directory_exists(os.path.dirname(db_path))
         self.db = EventDatabase(db_path)
         
@@ -255,22 +272,28 @@ class SecurityEventLogger:
         log_file = self.config.get('logging', {}).get('file')
         log_dir = os.path.dirname(log_file) if log_file else None
         
-        if log_dir:
+        if (log_dir):
             log_dir = self.ensure_directory_exists(log_dir)
             log_file = os.path.join(log_dir, os.path.basename(log_file))
         
         self.logger = logging.getLogger("SecurityEventLogger")
-        self.logger.setLevel(getattr(logging, self.config.get('general', {}).get('log_level', 'INFO')))
+        
+        # In GUI mode, use a higher level to reduce verbosity
+        if self.gui_mode:
+            self.logger.setLevel(logging.WARNING)
+        else:
+            self.logger.setLevel(getattr(logging, self.config.get('general', {}).get('log_level', 'INFO')))
         
         # Clear existing handlers
         self.logger.handlers = []
         
-        # Console handler (force stdout)
-        console_handler = logging.StreamHandler(sys.stdout)  # Explicitly use stdout
-        console_handler.setFormatter(logging.Formatter(
-            '%(asctime)s [%(levelname)s] %(message)s'
-        ))
-        self.logger.addHandler(console_handler)
+        # Console handler only when not in GUI mode
+        if not self.gui_mode:
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(logging.Formatter(
+                '%(asctime)s [%(levelname)s] %(message)s'
+            ))
+            self.logger.addHandler(console_handler)
         
         # File handler with rotation
         if log_file:
@@ -292,10 +315,14 @@ class SecurityEventLogger:
                 
     def setup_monitors(self):
         """Set up security monitors according to configuration."""
+        # Always enable process monitoring to catch all processes
+        self.monitors.append(ProcessMonitor(self))
+        
+        # Other monitors depend on configuration
         monitors_config = self.config.get('monitors', {})
         
         # Auth log monitor
-        if monitors_config.get('auth_log', False):
+        if monitors_config.get('auth_log', True):
             self.monitors.append(AuthLogMonitor(self))
         
         # Audit daemon monitor
@@ -303,82 +330,133 @@ class SecurityEventLogger:
             self.monitors.append(AuditdMonitor(self))
         
         # Syslog monitor
-        if monitors_config.get('syslog', False):
+        if monitors_config.get('syslog', True):
             self.monitors.append(SyslogMonitor(self))
         
         # Journald monitor (requires systemd)
-        if monitors_config.get('journald', False) and HAS_SYSTEMD:
+        if monitors_config.get('journald', True) and HAS_SYSTEMD:
             self.monitors.append(JournaldMonitor(self))
         
-        # File change monitor
-        if monitors_config.get('file_changes', False):
-            watched_dirs = self.config.get('watched_dirs', [])
+        # File change monitor - reduced scope to essential directories
+        if monitors_config.get('file_changes', True):
+            watched_dirs = self.config.get('watched_dirs', ["/etc"])
             self.monitors.append(FileChangeMonitor(self, watched_dirs))
         
         # Network monitor
-        if monitors_config.get('network', False):
+        if monitors_config.get('network', True):
             self.monitors.append(NetworkMonitor(self))
-        
-        # Process monitor
-        if monitors_config.get('processes', False):
-            self.monitors.append(ProcessMonitor(self))
     
-    def log_event(self, event_type: str, details: Dict[str, Any], level: str = "INFO"):
-        """Log a security event with Windows Event Log-style details."""
-        # Get the appropriate event_id
-        event_id = self.EVENT_IDS.get(event_type, "1000")  # Default to 1000 if not found
+    def log_event(self, event_type, details=None, level="INFO"):
+        """Log a security event with the specified type and details."""
+        if details is None:
+            details = {}
         
-        # Map level to Windows event type
-        win_type = "INFORMATION"
-        if level == "WARNING":
-            win_type = "WARNING"
-        elif level in ("ERROR", "CRITICAL"):
-            win_type = "ERROR"
-        elif "SECURITY" in event_type:
-            win_type = "SECURITY_AUDIT"
+        # Get current timestamp in ISO format
+        timestamp = datetime.datetime.now().isoformat()
         
-        # Create description
-        if isinstance(details, dict):
-            description = details.get('message', str(details))
-        else:
-            description = str(details)
+        # Generate a unique event ID
+        event_id = str(uuid.uuid4())
         
-        # Get username from details or use current user
-        username = details.get('username', None)
-        if not username and 'user' in details:
-            username = details['user']
-        if not username and os.geteuid() == 0:
-            username = "root"
-        elif not username:
-            try:
-                username = pwd.getpwuid(os.geteuid()).pw_name
-            except:
-                username = "SYSTEM"
+        # Get hostname
+        try:
+            hostname = socket.gethostname()
+        except:
+            hostname = "unknown"
         
-        # Create event record in Windows Event Log style
-        now = datetime.datetime.now()
+        # Get username
+        try:
+            username = getpass.getuser()
+        except:
+            username = "unknown"
+        
+        # Create event object
         event = {
-            "timestamp": now.isoformat(),
+            "timestamp": timestamp,  # Ensure this is a proper ISO timestamp
             "event_id": event_id,
-            "date": now.strftime('%Y-%m-%d'),
-            "time": now.strftime('%H:%M:%S'),
+            "type": event_type,
+            "level": level,
             "user": username,
-            "computer": self.config.get('general', {}).get('hostname', socket.gethostname()),
-            "source": event_type.split('_')[0],
-            "type": win_type,
-            "description": description,
-            "details": details
+            "computer": hostname,
+            "source": "SecurityLogger",
+            "description": self.get_event_description(event_type, details),
+            "details": json.dumps(details) if isinstance(details, dict) else "{}"
         }
         
-        # Add to database
-        self.db.add_event(event)
-        
-        # Add to queue for real-time processing
+        # Add to queue for processing
         self.event_queue.put(event)
         
-        # Log to console/file
-        log_method = getattr(self.logger, level.lower())
-        log_method(f"[{event_id}] {event_type}: {description}")
+        # Emit signal for new event
+        self.new_event.emit(event)
+        
+        # Also log to Python logger
+        log_method = getattr(self.logger, level.lower(), self.logger.info)
+        log_method(f"{event_type}: {self.get_event_description(event_type, details)}")
+        
+        return event
+    
+    def get_event_description(self, event_type, details=None):
+        """Generate a human-readable description for an event type."""
+        if details is None:
+            details = {}
+            
+        # Generic description templates
+        descriptions = {
+            "USER_LOGIN_SUCCESS": "User '{username}' logged in successfully from {source}",
+            "USER_LOGIN_FAILURE": "Failed login attempt for user '{username}' from {source}",
+            "USER_LOGOUT": "User '{username}' logged out",
+            "ACCOUNT_LOCKED": "Account '{username}' was locked after failed attempts",
+            "USER_CREATED": "New user account '{username}' was created",
+            "USER_DELETED": "User account '{username}' was deleted",
+            "USER_ENABLED": "User account '{username}' was enabled",
+            "USER_DISABLED": "User account '{username}' was disabled",
+            "PASSWORD_CHANGED": "Password changed for user '{username}'",
+            "SYSTEM_START": "System started or service initiated",
+            "SYSTEM_STOP": "System stopped or service terminated",
+            "SERVICE_START": "Service '{service}' started",
+            "SERVICE_STOP": "Service '{service}' stopped",
+            "FILE_ACCESS": "File '{path}' was accessed by '{username}'",
+            "FILE_CREATED": "File '{path}' was created by '{username}'",
+            "FILE_DELETED": "File '{path}' was deleted by '{username}'",
+            "PROCESS_CREATED": "Process '{name}' was created by '{username}'",
+            "PROCESS_TERMINATED": "Process '{name}' was terminated",
+            "NETWORK_CONNECTION": "Network connection {source_ip}:{source_port} to {dest_ip}:{dest_port}",
+            "FIREWALL_CHANGE": "Firewall rule was changed",
+            "SPECIAL_PRIVILEGE": "Special privileges used by '{username}'",
+            "PRIVILEGE_ESCALATION": "Privilege escalation by '{username}'",
+            "FILE_PERMISSION_CHANGE": "Permissions changed on '{path}'",
+            "SUDO_COMMAND": "Sudo command executed by '{username}'",
+            "SUSPICIOUS_COMMAND": "Suspicious command executed: '{cmdline}'",
+            "SECURITY_AUDIT": "Security audit event: {message}",
+            "SECURITY_ALERT": "Security alert: {message}",
+            "MONITOR_ERROR": "Monitoring error: {message}",
+            "MONITOR_WARNING": "Monitoring warning: {message}",
+            "INFORMATION": "{message}"
+        }
+        
+        # Get the template for this event type
+        template = descriptions.get(event_type, "{message}")
+        
+        # Extract variables from details
+        try:
+            # If details is provided as a JSON string, parse it
+            if isinstance(details, str):
+                try:
+                    details = json.loads(details)
+                except json.JSONDecodeError:
+                    details = {"message": details}
+            
+            # Set default message if none exists
+            if "message" not in details:
+                details["message"] = f"{event_type} event occurred"
+                
+            # Format the template with details
+            return template.format(**{**details, **{"event_type": event_type}})
+        except KeyError as e:
+            # If formatting fails due to missing key, return a generic message
+            return f"{event_type}: {details.get('message', 'Event occurred')}"
+        except Exception as e:
+            # If any other error occurs, return a very generic message
+            return f"{event_type} event occurred"
     
     def start(self):
         """Start the security event logger in real-time mode."""
@@ -441,30 +519,56 @@ class SecurityEventLogger:
             return "Unknown Linux"
     
     def process_events(self):
-        """Process events from the queue."""
+        """Process events from the queue with improved priority handling."""
+        high_priority_event_types = [
+            "SUSPICIOUS_COMMAND", "PRIVILEGE_ESCALATION", "USER_LOGIN_FAILURE",
+            "SECURITY_ALERT", "SECURITY_AUDIT"
+        ]
+        
+        high_priority_event_ids = [
+            "4625",  # Failed login
+            "4740",  # Account locked
+            "4672",  # Special privileges
+            "9002",  # Sudo command
+            "9003"   # Suspicious command
+        ]
+        
         while self.running:
             try:
-                event = self.event_queue.get(timeout=1.0)
+                # Process up to 10 events at once for better throughput
+                for _ in range(10):
+                    try:
+                        event = self.event_queue.get(timeout=0.1)
+                        
+                        # Check event priority
+                        event_type = event.get('type')
+                        event_id = event.get('event_id')
+                        
+                        is_high_priority = (
+                            event_type in high_priority_event_types or
+                            event_id in high_priority_event_ids or
+                            event.get('source') in ['sudo', 'su']
+                        )
+                        
+                        # Emit signals for all events (GUI needs this)
+                        self.new_event.emit(event)
+                        
+                        # Print warning for high-priority events if not in GUI mode
+                        if is_high_priority and not self.gui_mode:
+                            self.logger.warning(f"ALERT: High-priority security event: {event.get('description')}")
+                        
+                        # Store event in database 
+                        self.db.add_event(event)
+                        
+                        self.event_queue.task_done()
+                    except queue.Empty:
+                        break
                 
-                # Here we could implement real-time alerts based on event type
-                event_type = event.get('type')
-                
-                # Check for high-priority security events
-                if event_type in ["SECURITY_AUDIT", "SECURITY_ALERT"] or event.get('event_id') in [
-                    "4625",  # Failed login
-                    "4740",  # Account locked
-                    "4672",  # Special privileges
-                    "9002",  # Sudo command
-                    "9003"   # Suspicious command
-                ]:
-                    # For this example, just log that we would alert
-                    self.logger.warning(f"ALERT: High-priority security event: {event.get('description')}")
-                
-                self.event_queue.task_done()
-            except queue.Empty:
-                continue
+                # Short sleep to prevent CPU spinning
+                time.sleep(0.05)
             except Exception as e:
                 self.logger.error(f"Error processing event: {str(e)}")
+                time.sleep(0.1)  # Add a small delay on error
     
     def handle_signal(self, signum, frame):
         """Handle termination signals to gracefully shut down."""

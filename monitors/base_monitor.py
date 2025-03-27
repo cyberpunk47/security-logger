@@ -1,30 +1,24 @@
 import threading
-from typing import Dict, Any
+from typing import Any
 
-class BaseMonitor:
+class BaseMonitor(threading.Thread):
     """Base class for all security monitors."""
     
     def __init__(self, logger):
+        """Initialize the monitor with a logger."""
+        threading.Thread.__init__(self, daemon=True)
         self.logger = logger
         self.running = False
-        self.thread = None
+    
+    def run(self):
+        """Run the monitor. To be implemented by subclasses."""
+        raise NotImplementedError("Subclasses must implement the run method")
     
     def start(self):
-        """Start the monitor in a separate thread."""
-        if self.running:
-            return
-        
+        """Start the monitor."""
         self.running = True
-        self.thread = threading.Thread(target=self.run)
-        self.thread.daemon = True
-        self.thread.start()
+        super().start()
     
     def stop(self):
         """Stop the monitor."""
         self.running = False
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=2.0)
-    
-    def run(self):
-        """Main monitoring loop to be implemented by subclasses."""
-        raise NotImplementedError("Subclasses must implement run()")

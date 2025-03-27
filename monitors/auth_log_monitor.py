@@ -1,8 +1,6 @@
-import re
 import os
+import re
 import time
-import subprocess
-from typing import Dict, Any
 from .base_monitor import BaseMonitor
 
 class AuthLogMonitor(BaseMonitor):
@@ -11,67 +9,45 @@ class AuthLogMonitor(BaseMonitor):
     def __init__(self, logger):
         super().__init__(logger)
         self.auth_log_paths = [
-            "/var/log/auth.log",       # Debian/Ubuntu
-            "/var/log/secure",         # RedHat/CentOS
-            "/var/log/messages"        # Fallback
+            "/var/log/auth.log",
+            "/var/log/secure"
         ]
+        self.current_position = {}
     
     def run(self):
-        """Monitor authentication logs for security events."""
-        # Find the appropriate auth log file
+        """Monitor auth logs for security events."""
+        # Find the auth log file
         auth_log = None
         for path in self.auth_log_paths:
-            if os.path.exists(path) and os.access(path, os.R_OK):
+            if os.path.exists(path):
                 auth_log = path
                 break
         
         if not auth_log:
             self.logger.log_event(
-                "MONITOR_ERROR", 
-                {"message": "No readable authentication log file found"}, 
+                "MONITOR_WARNING", 
+                {"message": "Authentication log file not found"}, 
                 level="WARNING"
             )
-            # Try to use journalctl as a fallback
-            if self.has_journalctl():
-                self.monitor_auth_with_journalctl()
             return
         
-        # Pattern matching for common auth events
-        patterns = {
-            "USER_LOGIN_FAILURE": re.compile(r"(?:Failed password|authentication failure|failed login)"),
-            "USER_LOGIN_SUCCESS": re.compile(r"(?:Accepted password|session opened)"),
-            "SUDO_COMMAND": re.compile(r"sudo:"),
-            "USER_CREATED": re.compile(r"(?:new user|new account|useradd)"),
-            "USER_DELETED": re.compile(r"(?:delete user|userdel)"),
-            "ACCOUNT_LOCKED": re.compile(r"(?:account locked|too many authentication failures)"),
-        }
-        
-        # Start monitoring the log file
         try:
-            with open(auth_log, "r") as f:
-                # Move to the end of the file
-                f.seek(0, os.SEEK_END)
+            # Open the log file and seek to the end
+            with open(auth_log, 'r') as f:
+                f.seek(0, 2)  # Seek to the end
+                self.current_position[auth_log] = f.tell()
+            
+            # Monitor for new lines
+            while self.running:
+                if os.path.exists(auth_log):
+                    with open(auth_log, 'r') as f:
+                        f.seek(self.current_position[auth_log])
+                        for line in f:
+                            self.process_auth_line(line)
+                        self.current_position[auth_log] = f.tell()
                 
-                while self.running:
-                    line = f.readline()
-                    if line:
-                        # Check for security events
-                        for event_type, pattern in patterns.items():
-                            if pattern.search(line):
-                                details = {
-                                    "message": line.strip(), 
-                                    "source": auth_log
-                                }
-                                
-                                # Try to extract username
-                                user_match = re.search(r"user[=:\s]+(\w+)", line, re.IGNORECASE)
-                                if user_match:
-                                    details["username"] = user_match.group(1)
-                                
-                                level = "WARNING" if event_type in ["USER_LOGIN_FAILURE", "ACCOUNT_LOCKED"] else "INFO"
-                                self.logger.log_event(event_type, details, level=level)
-                    else:
-                        time.sleep(0.1)
+                time.sleep(0.1)  # Short sleep to reduce CPU usage
+                
         except Exception as e:
             self.logger.log_event(
                 "MONITOR_ERROR", 
@@ -79,65 +55,66 @@ class AuthLogMonitor(BaseMonitor):
                 level="ERROR"
             )
     
-    def has_journalctl(self):
-        """Check if journalctl is available."""
-        try:
-            subprocess.run(["which", "journalctl"], 
-                          stdout=subprocess.PIPE, 
-                          stderr=subprocess.PIPE)
-            return True
-        except:
-            return False
-    
-    def monitor_auth_with_journalctl(self):
-        """Use journalctl to monitor auth events as fallback."""
-        try:
-            # Set up the journalctl process to follow auth events
-            process = subprocess.Popen(
-                ["journalctl", "-f", "-t", "sshd", "-t", "sudo", "-t", "auth"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            # Pattern matching for common auth events
-            patterns = {
-                "USER_LOGIN_FAILURE": re.compile(r"(?:Failed password|authentication failure|failed login)"),
-                "USER_LOGIN_SUCCESS": re.compile(r"(?:Accepted password|session opened)"),
-                "SUDO_COMMAND": re.compile(r"sudo:"),
-                "USER_CREATED": re.compile(r"(?:new user|new account|useradd)"),
-                "USER_DELETED": re.compile(r"(?:delete user|userdel)"),
-                "ACCOUNT_LOCKED": re.compile(r"(?:account locked|too many authentication failures)"),
-            }
-            
-            # Process output
-            while self.running:
-                line = process.stdout.readline()
-                if not line:
-                    break
-                
-                # Check for security events
-                for event_type, pattern in patterns.items():
-                    if pattern.search(line):
-                        details = {
-                            "message": line.strip(), 
-                            "source": "journalctl"
-                        }
-                        
-                        # Try to extract username
-                        user_match = re.search(r"user[=:\s]+(\w+)", line, re.IGNORECASE)
-                        if user_match:
-                            details["username"] = user_match.group(1)
-                        
-                        level = "WARNING" if event_type in ["USER_LOGIN_FAILURE", "ACCOUNT_LOCKED"] else "INFO"
-                        self.logger.log_event(event_type, details, level=level)
-            
-            # Clean up
-            process.terminate()
-            
-        except Exception as e:
-            self.logger.log_event(
-                "MONITOR_ERROR", 
-                {"message": f"Error monitoring with journalctl: {str(e)}"}, 
-                level="ERROR"
-            )
+    def process_auth_line(self, line):
+        """Process a line from the auth log and log security events."""
+        # Check for successful login
+        if re.search(r'Accepted (password|publickey) for (\S+)', line):
+            match = re.search(r'Accepted (password|publickey) for (\S+) from (\S+)', line)
+            if match:
+                auth_type, username, source = match.groups()
+                self.logger.log_event(
+                    "USER_LOGIN_SUCCESS", 
+                    {
+                        "username": username,
+                        "source": source,
+                        "auth_type": auth_type,
+                        "message": f"User {username} logged in successfully from {source}"
+                    }
+                )
+        
+        # Check for failed login
+        elif re.search(r'Failed password for (\S+)', line):
+            match = re.search(r'Failed password for (\S+) from (\S+)', line)
+            if match:
+                username, source = match.groups()
+                self.logger.log_event(
+                    "USER_LOGIN_FAILURE", 
+                    {
+                        "username": username,
+                        "source": source,
+                        "message": f"Failed login attempt for user {username} from {source}"
+                    },
+                    level="WARNING"
+                )
+        
+        # Check for invalid user
+        elif re.search(r'Invalid user (\S+)', line):
+            match = re.search(r'Invalid user (\S+) from (\S+)', line)
+            if match:
+                username, source = match.groups()
+                self.logger.log_event(
+                    "USER_LOGIN_FAILURE", 
+                    {
+                        "username": username,
+                        "source": source,
+                        "message": f"Login attempt with invalid user {username} from {source}"
+                    },
+                    level="WARNING"
+                )
+        
+        # Check for sudo command
+        elif re.search(r'sudo: (\S+) : TTY=(\S+) ; PWD=(\S+) ; USER=(\S+) ; COMMAND=(\S+)', line):
+            match = re.search(r'sudo: (\S+) : TTY=(\S+) ; PWD=(\S+) ; USER=(\S+) ; COMMAND=(.+)$', line)
+            if match:
+                username, tty, pwd, target_user, command = match.groups()
+                self.logger.log_event(
+                    "SUDO_COMMAND", 
+                    {
+                        "username": username,
+                        "target_user": target_user,
+                        "command": command,
+                        "pwd": pwd,
+                        "message": f"User {username} executed sudo as {target_user}: {command}"
+                    },
+                    level="WARNING"
+                )

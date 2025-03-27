@@ -1,37 +1,40 @@
 import time
-import socket
 import psutil
+import socket
 from .base_monitor import BaseMonitor
 
 class NetworkMonitor(BaseMonitor):
-    """Monitor network connections and changes."""
+    """Monitor network connections for security events."""
     
     def __init__(self, logger):
         super().__init__(logger)
-        self.connections_cache = {}
+        self.connection_cache = set()
     
     def run(self):
-        """Monitor network connections."""
+        """Monitor network connections for security events."""
         try:
-            # Record initial state
-            self.connections_cache = self.get_network_connections()
-            self.log_network_interfaces()
+            # Get initial connections
+            self.connection_cache = self.get_connection_keys()
+            
+            # Brief pause to let system stabilize
+            time.sleep(1)
             
             # Monitor for changes
             while self.running:
                 # Get current connections
-                current_connections = self.get_network_connections()
+                current_connections = self.get_connection_keys()
                 
-                # Check for new connections
-                for conn_id, conn_info in current_connections.items():
-                    if conn_id not in self.connections_cache:
-                        self.log_new_connection(conn_info)
+                # Find new connections
+                new_connections = current_connections - self.connection_cache
+                
+                # Process new connections
+                for conn_key in new_connections:
+                    self.log_new_connection(conn_key)
                 
                 # Update cache
-                self.connections_cache = current_connections
+                self.connection_cache = current_connections
                 
-                # Check every 5 seconds
-                time.sleep(5)
+                time.sleep(1)  # Check every second
                 
         except Exception as e:
             self.logger.log_event(
@@ -40,84 +43,81 @@ class NetworkMonitor(BaseMonitor):
                 level="ERROR"
             )
     
-    def get_network_connections(self):
-        """Get current network connections."""
-        connections = {}
-        try:
-            for conn in psutil.net_connections(kind='inet'):
-                # Skip connections with no remote address
-                if not conn.raddr:
-                    continue
-                
-                # Create a unique identifier for this connection
-                conn_id = f"{conn.laddr.ip}:{conn.laddr.port}-{conn.raddr.ip}:{conn.raddr.port}"
-                
-                # Get process info
-                proc_name = "unknown"
-                if conn.pid:
-                    try:
-                        proc = psutil.Process(conn.pid)
-                        proc_name = proc.name()
-                    except:
-                        pass
-                
-                connections[conn_id] = {
-                    "local_address": f"{conn.laddr.ip}:{conn.laddr.port}",
-                    "remote_address": f"{conn.raddr.ip}:{conn.raddr.port}",
-                    "status": conn.status,
-                    "pid": conn.pid,
-                    "process": proc_name
-                }
-        except:
-            pass
+    def get_connection_keys(self):
+        """Get a set of connection keys for the current network connections."""
+        connections = set()
+        
+        for conn in psutil.net_connections(kind='inet'):
+            # Skip connections with no remote address
+            if not conn.raddr:
+                continue
+            
+            # Create a unique key for this connection
+            conn_key = (
+                conn.laddr.ip,
+                conn.laddr.port,
+                conn.raddr.ip,
+                conn.raddr.port,
+                conn.status,
+                conn.pid if conn.pid else 0
+            )
+            
+            connections.add(conn_key)
         
         return connections
     
-    def log_network_interfaces(self):
-        """Log information about network interfaces."""
-        try:
-            for interface, addresses in psutil.net_if_addrs().items():
-                for addr in addresses:
-                    if addr.family == socket.AF_INET:  # IPv4
-                        self.logger.log_event(
-                            "NETWORK_INTERFACE", 
-                            {
-                                "message": f"Network interface: {interface} - {addr.address}",
-                                "interface": interface,
-                                "address": addr.address,
-                                "netmask": addr.netmask
-                            }
-                        )
-        except Exception as e:
-            self.logger.log_event(
-                "MONITOR_ERROR", 
-                {"message": f"Error getting network interfaces: {str(e)}"}, 
-                level="ERROR"
-            )
-    
-    def log_new_connection(self, conn_info):
+    def log_new_connection(self, conn_key):
         """Log a new network connection."""
-        # Determine if this is potentially suspicious
-        is_suspicious = False
-        remote_ip = conn_info["remote_address"].split(":")[0]
+        local_ip, local_port, remote_ip, remote_port, status, pid = conn_key
         
-        # Check for common suspicious ports
-        suspicious_ports = [22, 23, 3389, 4444, 5900]
+        # Try to get process information
+        process_name = "unknown"
+        username = "unknown"
+        
+        if pid:
+            try:
+                process = psutil.Process(pid)
+                process_name = process.name()
+                username = process.username()
+            except:
+                pass
+        
+        # Try to perform reverse DNS lookup (with timeout)
+        remote_hostname = remote_ip
         try:
-            remote_port = int(conn_info["remote_address"].split(":")[1])
-            if remote_port in suspicious_ports:
-                is_suspicious = True
+            remote_hostname = socket.gethostbyaddr(remote_ip)[0]
         except:
             pass
         
+        # Determine if this is potentially suspicious
+        is_suspicious = False
+        
+        # Check for common suspicious ports
+        suspicious_ports = {22, 23, 3389, 4444, 5900, 8080, 1080, 9050}
+        if remote_port in suspicious_ports or local_port in suspicious_ports:
+            is_suspicious = True
+        
+        # Create message
+        message = f"New {status} connection: {local_ip}:{local_port} -> {remote_ip}:{remote_port}"
+        if process_name != "unknown":
+            message += f" (Process: {process_name}, PID: {pid})"
+        
+        # Create details
         details = {
-            "message": f"New network connection: {conn_info['local_address']} -> {conn_info['remote_address']} ({conn_info['process']})",
-            "local_address": conn_info["local_address"],
-            "remote_address": conn_info["remote_address"],
-            "process": conn_info["process"],
-            "pid": conn_info["pid"]
+            "message": message,
+            "local_ip": local_ip,
+            "local_port": local_port,
+            "remote_ip": remote_ip,
+            "remote_port": remote_port,
+            "remote_hostname": remote_hostname,
+            "status": status,
+            "pid": pid,
+            "process": process_name,
+            "username": username
         }
         
-        # Log at appropriate level
+        # Determine level based on suspiciousness
         level = "WARNING" if is_suspicious else "INFO"
+        
+        # Log the event
         self.logger.log_event("NETWORK_CONNECTION", details, level=level)

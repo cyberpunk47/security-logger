@@ -1,4 +1,11 @@
-psutil
-watchdog
-systemd-python
-tkinter
+PyQt5>=5.15.0
+matplotlib>=3.3.0
+pandas>=1.0.0
+psutil>=5.8.0
+watchdog>=2.1.0
+python-dateutil>=2.8.0
+systemd-python>=234; sys_platform == 'linux'
+configparser>=5.0.0
+PyQt5-sip>=12.8.0
+python-xlib>=0.27
+pkexec; sys_platform == 'linux'  # Alternative to gksu for privilege escalation

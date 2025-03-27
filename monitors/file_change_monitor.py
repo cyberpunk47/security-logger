@@ -1,89 +1,89 @@
 import os
 import time
-import pwd
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from .base_monitor import BaseMonitor
 
-class FileChangeMonitor(BaseMonitor):
-    """Monitor file system changes in critical directories."""
+class FileChangeEventHandler(FileSystemEventHandler):
+    """Handle file system events for security monitoring."""
     
-    def __init__(self, logger, watched_dirs=None):
+    def __init__(self, logger):
+        self.logger = logger
+    
+    def on_created(self, event):
+        """Handle file creation event."""
+        if not event.is_directory:
+            self.logger.log_event(
+                "FILE_CREATED", 
+                {
+                    "path": event.src_path,
+                    "message": f"File created: {event.src_path}"
+                }
+            )
+    
+    def on_deleted(self, event):
+        """Handle file deletion event."""
+        if not event.is_directory:
+            self.logger.log_event(
+                "FILE_DELETED", 
+                {
+                    "path": event.src_path,
+                    "message": f"File deleted: {event.src_path}"
+                }
+            )
+    
+    def on_modified(self, event):
+        """Handle file modification event."""
+        if not event.is_directory:
+            self.logger.log_event(
+                "FILE_ACCESS", 
+                {
+                    "path": event.src_path,
+                    "message": f"File modified: {event.src_path}"
+                }
+            )
+    
+    def on_moved(self, event):
+        """Handle file move event."""
+        if not event.is_directory:
+            self.logger.log_event(
+                "FILE_ACCESS", 
+                {
+                    "path": event.src_path,
+                    "dest_path": event.dest_path,
+                    "message": f"File moved: {event.src_path} -> {event.dest_path}"
+                }
+            )
+
+class FileChangeMonitor(BaseMonitor):
+    """Monitor file system changes for security events."""
+    
+    def __init__(self, logger, watched_dirs):
         super().__init__(logger)
-        self.watched_dirs = watched_dirs or ["/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin"]
-        self.observer = None
+        self.watched_dirs = watched_dirs
+        self.observers = []
     
     def run(self):
-        """Monitor file system changes."""
+        """Set up and run file change monitoring."""
         try:
-            # Define event handler
-            class EventHandler(FileSystemEventHandler):
-                def __init__(self, monitor):
-                    self.monitor = monitor
-                
-                def on_created(self, event):
-                    self.log_event(event, "FILE_CREATED")
-                
-                def on_deleted(self, event):
-                    self.log_event(event, "FILE_DELETED")
-                
-                def on_modified(self, event):
-                    self.log_event(event, "FILE_MODIFIED")
-                
-                def on_moved(self, event):
-                    self.log_event(event, "FILE_MOVED")
-                
-                def log_event(self, event, event_type):
-                    # Get file owner
-                    username = "UNKNOWN"
-                    try:
-                        stat_info = os.stat(event.src_path)
-                        username = pwd.getpwuid(stat_info.st_uid).pw_name
-                    except:
-                        pass
-                    
-                    # Create details
-                    details = {
-                        "message": f"File change detected: {event.src_path}",
-                        "path": event.src_path,
-                        "username": username,
-                        "event_type": event_type
-                    }
-                    
-                    # Determine if this is a sensitive file
-                    is_sensitive = event.src_path in [
-                        "/etc/passwd", "/etc/shadow", "/etc/sudoers", 
-                        "/etc/ssh/sshd_config", "/etc/pam.d/common-auth"
-                    ]
-                    
-                    # Log the event
-                    level = "WARNING" if is_sensitive else "INFO"
-                    self.monitor.logger.log_event(event_type, details, level=level)
+            # Create event handler
+            event_handler = FileChangeEventHandler(self.logger)
             
-            # Set up the observer
-            self.observer = Observer()
-            handler = EventHandler(self)
-            
-            # Add watches for all directories
+            # Set up observers for each watched directory
             for directory in self.watched_dirs:
-                if os.path.exists(directory) and os.access(directory, os.R_OK):
-                    self.observer.schedule(handler, directory, recursive=True)
-                    self.logger.log_event(
-                        "MONITOR_INFO", 
-                        {"message": f"Watching directory: {directory}"}, 
-                        level="INFO"
-                    )
+                if os.path.exists(directory):
+                    observer = Observer()
+                    observer.schedule(event_handler, directory, recursive=True)
+                    observer.start()
+                    self.observers.append(observer)
                 else:
                     self.logger.log_event(
                         "MONITOR_WARNING", 
-                        {"message": f"Cannot watch directory (not found or no access): {directory}"}, 
+                        {"message": f"Watched directory does not exist: {directory}"}, 
                         level="WARNING"
                     )
             
-            # Start the observer
-            self.observer.start()
-            
-            # Keep the thread alive
+            # Keep running until stopped
             while self.running:
                 time.sleep(1)
                 
@@ -94,14 +94,17 @@ class FileChangeMonitor(BaseMonitor):
                 level="ERROR"
             )
         finally:
-            # Clean up
-            if self.observer is not None:
-                self.observer.stop()
-                self.observer.join()
+            # Stop all observers
+            for observer in self.observers:
+                observer.stop()
+            
+            # Wait for all observer threads to join
+            for observer in self.observers:
+                observer.join()
     
     def stop(self):
         """Stop the file change monitor."""
         super().stop()
-        if self.observer is not None:
-            self.observer.stop()
-            self.observer.join()
+        for observer in self.observers:
+            observer.stop()
+            observer.join()

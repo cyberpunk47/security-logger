@@ -13,6 +13,35 @@ A Python-based security event monitoring system for Linux that emulates Windows 
   Stores events in `/var/log/securityevents.db` by default for query and analysis.
 - **Systemd Service**  
   Supports installation as a background service for 24/7 monitoring.
+- **Theme Support**
+  Customizable dark and light themes for the GUI interface.
+- **Thread-Safe Operations**
+  Enhanced database operations with proper thread locks for improved stability.
+- **Background Data Processing**
+  UI responsiveness improvements with background data refresh workers.
+---
+
+## Recent Updates
+- **GUI Framework Migration**: Migrated from tkinter to PyQt5 for a more modern and responsive interface
+- **Data Analysis Improvements**: Integrated pandas for efficient data handling and manipulation
+- **Enhanced Visualizations**: Added matplotlib for improved statistical charts and event analysis
+- **Enhanced GUI Display Support**: Fixed X11 display connection issues when running with sudo
+- **Theme Customization**: Added full dark/light theme support for better visibility
+- **Thread Safety Improvements**: Enhanced database operations with proper thread locks
+- **Performance Optimization**: Improved UI responsiveness with background data refresh workers
+- **Better Error Handling**: Enhanced error feedback and system integration
+- **Multiple Admin Methods**: Added several methods to run with elevated privileges
+- **Database Optimization**: Added automatic vacuuming to prevent database bloat
+- **Statistical Visualizations**: Improved charts and data representation
+
+### Technology Transition
+The project has undergone significant technological updates:
+- **GUI**: Migrated from basic tkinter to modern PyQt5 for better UX and theme support
+- **Data Processing**: Added pandas for efficient data manipulation and filtering
+- **Visualization**: Integrated matplotlib for advanced charting and event analysis
+- **Threading**: Improved multi-threading support for background processing
+- **System Integration**: Better integration with X11 display server and systemd
+
 ---
 ## Installation
 ### Prerequisites
@@ -75,7 +104,32 @@ python security_logger.py --search "event_id = '4625'"  # Filter failed logins
 # Launch the graphical interface
 python gui.py
 ```
-> **Note**: The GUI is a work-in-progress (WIP). Ensure GUI dependencies (e.g., `tkinter`) are installed.
+> **Note**: Some features in the GUI are still under development. For the most stable experience, use the terminal mode.
+
+### Running With Elevated Privileges
+The Security Event Logger requires root access to monitor many system logs. There are several ways to run with elevated privileges:
+
+#### Method 1: Using xhost (Recommended for GUI)
+```bash
+# Allow root to access X server (temporarily)
+xhost +local:root
+# Run the application
+sudo /path/to/venv/bin/python /path/to/security_event_logger/gui.py
+# Restore X server security
+xhost -local:root
+```
+
+#### Method 2: Using sudo -E
+```bash
+# Run with sudo while preserving environment variables
+sudo -E /path/to/venv/bin/python /path/to/security_event_logger/gui.py
+```
+
+#### Method 3: Using the run_with_admin script
+```bash
+sudo /path/to/venv/bin/python /path/to/security_event_logger/run_with_admin.py
+```
+
 ### Systemd Service
 ```bash
 # Install and start as a background service (requires root)
@@ -84,23 +138,29 @@ sudo systemctl status seclog.service         # Verify status
 ```
 ---
 
-
 ## Notes on GUI and Terminal Issues
 ### GUI Issues
-1. **Missing `tkinter`**:
-   - If the GUI fails to launch, ensure `tkinter` is installed:
+1. **X11 Display Errors**:
+   - When running with sudo, you may encounter X server connection errors
+   - Use one of the methods listed above in the "Running With Elevated Privileges" section
+   - Normal messages like `QStandardPaths: XDG_RUNTIME_DIR not set` can be safely ignored
+
+2. **PyQt5 Dependencies**:
+   - The GUI now uses PyQt5 instead of tkinter
+   - If you encounter errors, ensure all dependencies are installed:
      ```bash
-     # Debian/Ubuntu
-     sudo apt install python3-tk
-     # Fedora
-     sudo dnf install python3-tkinter
+     pip install -r requirements.txt
      ```
-   - If the issue persists, run the application in terminal mode (`security_logger.py`).
-2. **GUI Crashes**:
-   - The GUI is a **work-in-progress** and may crash on unsupported systems or configurations.
-   - Check the terminal for error messages and report them in the [Issues](https://github.com/yourusername/security-event-logger/issues) section.
-3. **Limited Features**:
-   - The GUI currently supports basic event viewing and filtering. Advanced features (e.g., real-time alerts) are only available in terminal mode.
+
+3. **GUI Performance**:
+   - With high volumes of events, the GUI may become less responsive
+   - Use the filtering options to limit the displayed events
+   - Statistical visualizations are resource-intensive and are only updated when that tab is active
+
+4. **Theme Issues**:
+   - If themes don't load correctly, check the assets/themes directory
+   - You can switch between dark and light themes from the dropdown menu
+
 ### Terminal Issues
 1. **Permission Denied**:
    - If running without root privileges, some events (e.g., `auditd`, `journald`) may not be captured.
@@ -114,6 +174,15 @@ sudo systemctl status seclog.service         # Verify status
 3. **Missing Logs**:
    - Ensure the monitored log files (e.g., `/var/log/auth.log`) exist and are readable.
    - Adjust the `config.ini` file to include valid paths.
+---
+## Known Limitations and Work in Progress
+- **Advanced Event Correlation**: Machine learning-based correlation features are under development
+- **Remote Monitoring**: Support for monitoring multiple systems from a central console is planned
+- **SIEM Integration**: Export capabilities for SIEM systems are in progress
+- **Resource Usage**: Intensive monitoring may increase CPU and memory usage
+- **GUI Stability**: The GUI interface may crash under certain conditions - this is being addressed
+- **Database Growth**: The database can grow large over time - automatic cleanup is being improved
+
 ---
 ## Project Structure
 ```

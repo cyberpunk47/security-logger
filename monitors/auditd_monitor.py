@@ -1,6 +1,6 @@
 import subprocess
 import time
-import pwd  # Add this import
+import pwd
 from typing import Dict
 from .base_monitor import BaseMonitor
 

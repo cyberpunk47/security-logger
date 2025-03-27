@@ -1,0 +1,85 @@
+QMainWindow, QWidget {
+    background-color: #f5f5f5;
+    color: #333333;
+}
+
+QTextEdit, QTableView, QListView, QTreeView {
+    background-color: #ffffff;
+    color: #000000;
+    border: 1px solid #ddd;
+    font-family: 'Courier New';
+}
+
+QTableView::item, QListView::item, QTreeView::item {
+    color: #000000;
+    background-color: #ffffff;
+}
+
+QHeaderView::section {
+    background-color: #e0e0e0;
+    color: #333333;
+    padding: 4px;
+    border: 1px solid #ddd;
+}
+
+QTabWidget::pane {
+    border: 1px solid #ddd;
+    background: #f5f5f5;
+}
+
+QTabBar::tab {
+    background: #e0e0e0;
+    color: #333333;
+    padding: 8px;
+    border: 1px solid #ddd;
+}
+
+QTabBar::tab:selected {
+    background: #ffffff;
+}
+
+QStatusBar {
+    background: #e0e0e0;
+    color: #333333;
+}
+
+QComboBox {
+    background: #e0e0e0;
+    color: #333333;
+    border: 1px solid #ccc;
+    padding: 5px;
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 15px;
+    border-left-width: 1px;
+    border-left-color: #ccc;
+    border-left-style: solid;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    color: #000000;
+    selection-background-color: #c0c0c0;
+    selection-color: #000000;
+    border: 1px solid #ccc;
+}
+
+QPushButton {
+    background: #e0e0e0;
+    color: #333333;
+    border: 1px solid #ccc;
+    padding: 5px;
+}
+
+QLabel {
+    color: #333333;
+}
+
+QToolTip {
+    background-color: #ffffff;
+    color: #333333;
+    border: 1px solid #ccc;
+}
