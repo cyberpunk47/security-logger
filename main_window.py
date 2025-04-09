@@ -1,6 +1,6 @@
-import os
-import json
-import pandas as pd
+# File: main_window.py
+# Security Event Logger - Main GUI Window
+# Provides graphical interface for security event monitoring and analysis
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QTabWidget, QTableView,
     QStatusBar, QComboBox, QPushButton, QHBoxLayout, QFileDialog,
@@ -10,8 +10,11 @@ from PyQt5.QtCore import Qt, QAbstractTableModel, QSortFilterProxyModel, QTimer,
 from PyQt5.QtGui import QColor
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-import matplotlib.dates as mdates
+import matplotlib.pyplot as plt  # Ensure this is imported
+import pandas as pd
+import json
 import time
+import gc
 
 class EventTableModel(QAbstractTableModel):
     def __init__(self, parent=None):
@@ -28,6 +31,7 @@ class EventTableModel(QAbstractTableModel):
             'SECURITY_ALERT': QColor(255, 0, 0)      # Red
         }
         self._theme = "Dark"  # Default theme
+        self._max_rows = 5000  # Limit maximum rows for performance
 
     def set_theme(self, theme):
         """Update the model's theme setting"""
@@ -60,14 +64,32 @@ class EventTableModel(QAbstractTableModel):
                 return ""
         elif role == Qt.BackgroundRole:
             try:
-                # Safely get the event type (column 2) with a fallback
-                event_type = self._data.iloc[row, 2] if col >= 0 and len(self._data) > row and len(self._data.columns) > 2 else ""
-                # Use theme-appropriate colors
-                if self._theme == "Dark":
-                    return self._colors.get(event_type, QColor(45, 45, 45))  # Dark gray default
+                # Only color rows based on event type/level (not specific cells)
+                event_level = str(self._data.iloc[row, 4]) if len(self._data) > row else ""
+                
+                # Map common event levels to our color scheme
+                color_key = event_level.upper()
+                if "INFO" in color_key:
+                    color_key = "INFORMATION"
+                elif "WARN" in color_key:
+                    color_key = "WARNING"
+                elif "ERROR" in color_key or "FAIL" in color_key:
+                    color_key = "ERROR"
+                elif "AUDIT" in color_key:
+                    color_key = "SECURITY_AUDIT"
+                elif "ALERT" in color_key:
+                    color_key = "SECURITY_ALERT"
+                
+                # Get appropriate color with fallback based on theme
+                color = self._colors.get(color_key)
+                if color:
+                    # If we have a matching color, return it
+                    return color
                 else:
-                    return self._colors.get(event_type, QColor(255, 255, 255))  # White default
-            except:
+                    # Otherwise return theme-appropriate default
+                    return QColor(45, 45, 45) if self._theme == "Dark" else QColor(255, 255, 255)
+            except Exception as e:
+                print(f"Color error: {e}")
                 # Return default color based on theme if there's any error
                 return QColor(45, 45, 45) if self._theme == "Dark" else QColor(255, 255, 255)
         elif role == Qt.ForegroundRole:
@@ -87,6 +109,9 @@ class EventTableModel(QAbstractTableModel):
 
     def update_data(self, new_data):
         self.beginResetModel()
+        # Limit the number of rows to prevent memory issues
+        if len(new_data) > self._max_rows:
+            new_data = new_data.iloc[:self._max_rows]
         self._data = new_data
         self.endResetModel()
 
@@ -101,12 +126,13 @@ class DataRefreshWorker(QRunnable):
     @pyqtSlot()
     def run(self):
         try:
-            # Fetch data in background thread
-            events = self.db.get_recent_events(1000)
-            # Send results back to main thread
+            # Get only the most recent events (limit to 5000)
+            events = self.db.get_recent_events(5000)
             self.callback(events)
         except Exception as e:
-            print(f"Error in worker thread: {e}")
+            print(f"Error in data refresh worker: {e}")
+            # Return empty list instead of crashing
+            self.callback([])
 
 class MainWindow(QMainWindow):
     # Define the signal at the class level, not in a method
@@ -123,58 +149,40 @@ class MainWindow(QMainWindow):
         
         self.setup_ui()
         self.setup_refresh_timer()
+        self.setup_memory_management()
         self.load_initial_data()
 
     def handle_new_event(self, event):
         """Handle a new event received directly from the logger."""
         try:
-            # Create a copy to avoid modifying the original
-            event_copy = event.copy()
-            
-            # Fix details format for display
-            if 'details' in event_copy and isinstance(event_copy['details'], str):
-                try:
-                    event_copy['details'] = json.loads(event_copy['details'])
-                except:
-                    pass
-            
-            # Convert timestamp
-            if 'timestamp' in event_copy:
-                try:
-                    event_copy['timestamp'] = pd.to_datetime(
-                        event_copy['timestamp'], errors='coerce'
-                    ).strftime('%Y-%m-%d %H:%M:%S')
-                except:
-                    pass
-            
-            # Create a single row dataframe with correct column order
-            column_order = ["timestamp", "event_id", "type", "user", "computer", "source", "description"]
-            new_df = pd.DataFrame([event_copy])
-            
-            # Ensure all columns are present in the right order
-            for col in column_order:
-                if col not in new_df.columns:
-                    new_df[col] = None
-            
-            # Keep only the columns in the defined order
-            new_df = new_df[column_order]
-            
-            # If model data is empty, just use this row
-            if self.model._data.empty:
-                self.model.update_data(new_df)
-            else:
-                # Combine and update
-                combined = pd.concat([new_df, self.model._data]).reset_index(drop=True)
-                self.model.update_data(combined)
-            
-            # Update filter
-            self.apply_filter(self.filter_combo.currentText())
-            
-            # Scroll to show the new event
-            self.event_table.scrollToTop()
-            
+            # Only update if visible and not in the middle of an operation
+            if self.isVisible() and not self.refresh_in_progress:
+                # Create a copy to avoid modifying the original
+                event_copy = event.copy()
+                
+                # Simple column mapping - avoid complex operations
+                columns = ["timestamp", "event_id", "type", "user", "computer", "source", "description"]
+                new_row = {col: event_copy.get(col, "") for col in columns}
+                
+                # Create a temporary DataFrame
+                new_df = pd.DataFrame([new_row])
+                
+                # Prepend to the existing data - limit size
+                if len(self.model._data) >= self.model._max_rows:
+                    # Remove the last row
+                    self.model._data = pd.concat([new_df, self.model._data.iloc[:-1]])
+                else:
+                    self.model._data = pd.concat([new_df, self.model._data])
+                    
+                # Update model without full reset
+                self.model.layoutChanged.emit()
+                
+                # Update filter only if needed
+                current_filter = self.filter_combo.currentText()
+                if current_filter != "All":
+                    self.apply_filter(current_filter)
+                    
         except Exception as e:
-            self.status_bar.showMessage(f"Error handling new event: {str(e)}", 3000)
             print(f"Error handling new event: {e}")
 
     def setup_ui(self):
@@ -235,6 +243,17 @@ class MainWindow(QMainWindow):
         self.event_table.setModel(self.proxy_model)
         
         self.apply_theme("Dark")
+        
+        # Connect tab change signal
+        self.tabs.currentChanged.connect(self.tab_changed)
+
+    def tab_changed(self, index):
+        # Only update stats when switching to the stats tab
+        if index == 1:  # Stats tab
+            self.update_stats()
+        # When switching to events tab, make sure filters are applied
+        elif index == 0:
+            self.apply_filter(self.filter_combo.currentText())
 
     def apply_filter(self, filter_text):
         """Filter events based on the selected event type."""
@@ -300,27 +319,47 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.timeline_canvas)
 
     def setup_refresh_timer(self):
-        # Create a thread pool with maximum 2 concurrent threads
+        # Create a thread pool with maximum 1 concurrent thread (reduce thread contention)
         self.threadpool = QThreadPool()
-        self.threadpool.setMaxThreadCount(2)  # Limit thread count
+        self.threadpool.setMaxThreadCount(1)
         
         # Set up refresh timer
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.refresh_data)
-        self.refresh_timer.start(500)  # Faster refresh but with throttling
+        self.refresh_timer.start(2000)  # Slower refresh (2 seconds instead of 500ms)
         
-        # Add a throttle mechanism
+        # Add a throttle mechanism with longer interval
         self.last_refresh = time.time()
         self.refresh_in_progress = False
+
+    def setup_memory_management(self):
+        """Set up periodic memory cleanup"""
+        self.memory_timer = QTimer()
+        self.memory_timer.timeout.connect(self.cleanup_memory)
+        self.memory_timer.start(60000)  # Run every minute
+    
+    def cleanup_memory(self):
+        """Force garbage collection and clear caches"""
+        try:
+            gc.collect()
+            # Clear matplotlib cache if it exists
+            if hasattr(self, 'type_figure'):
+                import matplotlib.pyplot as plt  # Local import as fallback
+                plt.close('all')
+        except Exception as e:
+            print(f"Memory cleanup error: {e}")
 
     def refresh_data(self):
         # Throttle refreshes to prevent overwhelming the UI
         current_time = time.time()
-        if self.refresh_in_progress or current_time - self.last_refresh < 0.4:
+        if self.refresh_in_progress or current_time - self.last_refresh < 1.5:  # Longer throttle
             return
         
         self.refresh_in_progress = True
         self.last_refresh = current_time
+        
+        # Show processing indicator
+        self.status_bar.showMessage("Refreshing events...", 0)
         
         # Use worker thread for database operations
         worker = DataRefreshWorker(
@@ -343,31 +382,28 @@ class MainWindow(QMainWindow):
             
             # Handle details column
             if 'details' in df.columns:
-                df['details'] = df['details'].apply(
-                    lambda x: json.loads(x) if isinstance(x, str) and x else {})
+                df['details'] = df['details'].apply(lambda x: x if isinstance(x, str) else str(x))
             
             # Fix timestamp formatting
             if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-                # Format for display
-                df['timestamp'] = df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                df['timestamp'] = df['timestamp'].apply(lambda x: x.split('.')[0].replace('T', ' ') if isinstance(x, str) and 'T' in x else x)
             
-            # Ensure correct column order to match model - column mapping was incorrect
+            # Ensure correct column order
             column_order = ["timestamp", "event_id", "type", "user", "computer", "source", "description"]
             df_ordered = pd.DataFrame(columns=column_order)
             
-            # Map database columns to display columns
+            # Map database columns to display columns - safely
             for col in column_order:
                 if col in df.columns:
                     df_ordered[col] = df[col]
                 else:
-                    df_ordered[col] = None
-                    
+                    df_ordered[col] = ""  # Empty placeholder for missing columns
+            
             # Update model with ordered data
             self.model.update_data(df_ordered)
             
-            # Only update stats when tab is visible to save resources
-            if self.tabs.currentIndex() == 1:  # Stats tab
+            # Only update stats when tab is visible
+            if self.tabs.currentIndex() == 1:
                 self.update_stats()
             
             self.status_bar.showMessage(f"Loaded {len(df)} events", 3000)
@@ -397,52 +433,47 @@ class MainWindow(QMainWindow):
         if df.empty:
             return
         
-        # Clear previous plots
-        self.type_ax.clear()
-        self.timeline_ax.clear()
-        
-        # Event Type Distribution
-        if 'type' in df.columns:
-            try:
-                type_counts = df['type'].value_counts()
-                if not type_counts.empty:
-                    colors = ['#4CAF50', '#FFC107', '#F44336', '#9C27B0']
-                    type_counts.plot(kind='bar', ax=self.type_ax, color=colors[:len(type_counts)])
+        try:
+            # Clear previous plots
+            self.type_ax.clear()
+            self.timeline_ax.clear()
+            
+            # Event Type Distribution
+            if 'type' in df.columns:
+                try:
+                    type_counts = df['type'].value_counts()
+                    self.type_ax.pie(type_counts.values, labels=type_counts.index, autopct='%1.1f%%')
                     self.type_ax.set_title('Event Type Distribution')
-                    for tick in self.type_ax.get_xticklabels():
-                        tick.set_rotation(45)
-                    self.type_figure.tight_layout()
                     self.type_canvas.draw()
-            except Exception as e:
-                print(f"Error updating type chart: {e}")
-        
-        # Timeline Chart
-        if 'timestamp' in df.columns:
-            try:
-                # Convert timestamps to datetime safely
-                df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-                df = df.dropna(subset=['timestamp'])
-                
-                # Only create timeline if we have data
-                if not df.empty:
-                    df_timeline = df.copy()  # Create a separate copy
-                    df_timeline.set_index('timestamp', inplace=True)
+                except Exception as e:
+                    print(f"Error updating type chart: {e}")
+            
+            # Timeline Chart
+            if 'timestamp' in df.columns:
+                try:
+                    # Convert timestamps to datetime safely
+                    df['date'] = pd.to_datetime(df['timestamp'], errors='coerce')
                     
-                    # Use explicit 5min for resampling to avoid deprecation warnings
-                    hourly_counts = df_timeline.resample('5min').size()
+                    # Drop rows where conversion failed
+                    df = df.dropna(subset=['date'])
                     
-                    # Only plot if we have data points
-                    if len(hourly_counts) > 0:
-                        self.timeline_ax.plot(hourly_counts.index, hourly_counts.values, 
-                                             marker='o', linestyle='-', color='#2196F3')
-                        self.timeline_ax.set_title('Event Timeline (5 Minute Intervals)')
-                        self.timeline_ax.set_ylabel('Number of Events')
-                        self.timeline_ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-                        self.timeline_ax.grid(True, linestyle='--', alpha=0.7)
+                    # Group by date and count events
+                    if not df.empty:  # Check again after dropping NAs
+                        timeline = df.groupby(df['date'].dt.date).size()
+                        
+                        # Plot the timeline
+                        dates = [str(d) for d in timeline.index]
+                        self.timeline_ax.bar(dates, timeline.values)
+                        self.timeline_ax.set_title('Events Over Time')
+                        self.timeline_ax.tick_params(axis='x', rotation=45)
+                        self.timeline_ax.set_xlabel('Date')
+                        self.timeline_ax.set_ylabel('Event Count')
                         self.timeline_figure.tight_layout()
                         self.timeline_canvas.draw()
-            except Exception as e:
-                print(f"Error updating timeline chart: {e}")
+                except Exception as e:
+                    print(f"Error updating timeline chart: {e}")
+        except Exception as e:
+            print(f"Error in update_stats: {e}")
 
     def export_to_csv(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Export to CSV", "", "CSV Files (*.csv)")

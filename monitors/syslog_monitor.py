@@ -1,3 +1,6 @@
+# File: syslog_monitor.py
+# Security Event Logger - System Log Monitor Module
+# Monitors syslog for security events
 import os
 import re
 import time

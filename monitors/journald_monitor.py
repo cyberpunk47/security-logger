@@ -1,3 +1,6 @@
+# File: journald_monitor.py
+# Security Event Logger - Systemd Journal Monitor Module
+# Monitors systemd journal for security events
 import re
 import time
 from .base_monitor import BaseMonitor

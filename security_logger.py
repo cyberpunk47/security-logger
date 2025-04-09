@@ -1,3 +1,7 @@
+# File: security_logger.py
+# Security Event Logger - Core Module
+# Main security event logging implementation with Windows-style event formatting
+
 import os
 import sys
 import time
@@ -38,6 +42,7 @@ from event_database import EventDatabase  # Add this import
 
 # Add this import at the top
 from PyQt5.QtCore import QObject, pyqtSignal
+
 
 # Function to check and install required dependencies
 def check_and_install_dependencies():
@@ -354,8 +359,8 @@ class SecurityEventLogger(QObject):
         # Get current timestamp in ISO format
         timestamp = datetime.datetime.now().isoformat()
         
-        # Generate a unique event ID
-        event_id = str(uuid.uuid4())
+        # Use the Windows event ID mapping instead of UUID
+        event_id = self.EVENT_IDS.get(event_type, "1000")  # Default to 1000 if not mapped
         
         # Get hostname
         try:
@@ -369,15 +374,18 @@ class SecurityEventLogger(QObject):
         except:
             username = "unknown"
         
+        # Use source from details if provided, otherwise use default
+        source = details.get("source", "SecurityLogger")
+        
         # Create event object
         event = {
             "timestamp": timestamp,  # Ensure this is a proper ISO timestamp
-            "event_id": event_id,
+            "event_id": event_id,  # Use the Windows-style ID here
             "type": event_type,
             "level": level,
             "user": username,
             "computer": hostname,
-            "source": "SecurityLogger",
+            "source": source,  # Use the extracted source
             "description": self.get_event_description(event_type, details),
             "details": json.dumps(details) if isinstance(details, dict) else "{}"
         }

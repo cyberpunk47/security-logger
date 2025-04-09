@@ -1,3 +1,11 @@
+# File: __init__.py
+# Security Event Logger - Monitors Package Initialization
+# Import all monitor classes to make them available when importing the monitors package
+from .base_monitor import BaseMonitor
+
+# File: auditd_monitor.py
+# Security Event Logger - Auditd Monitor Module
+# Monitors Linux audit daemon logs for security events
 import subprocess
 import time
 import pwd

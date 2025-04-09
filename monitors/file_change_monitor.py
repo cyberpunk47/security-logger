@@ -1,3 +1,6 @@
+# File: file_change_monitor.py
+# Security Event Logger - File System Monitor Module
+# Monitors file system changes in critical directories
 import os
 import time
 from watchdog.observers import Observer

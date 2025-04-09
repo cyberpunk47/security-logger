@@ -1,3 +1,6 @@
+# File: network_monitor.py
+# Security Event Logger - Network Monitor Module
+# Monitors network connections for security events
 import time
 import psutil
 import socket

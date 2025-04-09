@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# File: run_with_admin.py
+# Security Event Logger - Admin Privilege Runner
+# Utility script to run the application with administrative privileges
+
 import sys
 import os
 import subprocess

@@ -1,3 +1,6 @@
+# File: base_monitor.py
+# Security Event Logger - Base Monitor Class
+# Abstract base class for all security event monitors
 import threading
 from typing import Any
 

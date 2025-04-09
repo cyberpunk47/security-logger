@@ -1,3 +1,6 @@
+# File: auth_log_monitor.py
+# Security Event Logger - Authentication Log Monitor Module
+# Monitors authentication logs for login attempts and sudo commands
 import os
 import re
 import time
@@ -81,7 +84,7 @@ class AuthLogMonitor(BaseMonitor):
                     "USER_LOGIN_FAILURE", 
                     {
                         "username": username,
-                        "source": source,
+                        "source": "auth.log",  # Set specific source here
                         "message": f"Failed login attempt for user {username} from {source}"
                     },
                     level="WARNING"

@@ -1,8 +1,12 @@
+# File: process_monitor.py
+# Security Event Logger - Process Monitor Module
+# Monitors process creation and termination for suspicious activity
 import os
 import time
 import psutil
 import threading
-import subprocess  # Add this import for sudo_watcher
+import subprocess
+import re  # Add this missing import
 from datetime import datetime
 from .base_monitor import BaseMonitor
 
@@ -34,6 +38,10 @@ class ProcessMonitor(BaseMonitor):
             
             # Start sudo watcher in separate thread
             self.start_sudo_watcher()
+            
+            # Start the process tracer in a separate thread
+            tracer_thread = threading.Thread(target=self.start_process_tracer, daemon=True)
+            tracer_thread.start()
             
             # Get initial process snapshot
             self.process_cache = self.get_processes()
@@ -131,6 +139,74 @@ class ProcessMonitor(BaseMonitor):
             self.logger.log_event(
                 "MONITOR_ERROR", 
                 {"message": f"Error in sudo watcher: {str(e)}"}, 
+                level="ERROR"
+            )
+    
+    def start_process_tracer(self):
+        """Start a specialized process tracer to catch short-lived commands."""
+        try:
+            # Use auditd to track execve system calls with raw format for better parsing
+            process = subprocess.Popen(
+                ["stdbuf", "-oL", "ausearch", "-sc", "execve", "-i", "--raw"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1
+            )
+            
+            # Variables to track current command
+            current_command = None
+            current_user = None
+            
+            for line in iter(process.stdout.readline, ""):
+                if not self.running:
+                    break
+                    
+                # Look for command in raw format
+                if "exe=" in line:
+                    # Extract executable path
+                    exe_match = re.search(r'exe="([^"]+)"', line)
+                    if exe_match:
+                        # Get just the command name from path
+                        current_command = os.path.basename(exe_match.group(1))
+                
+                # Extract username 
+                if "auid=" in line:
+                    user_match = re.search(r'auid=(\d+)', line)
+                    if user_match:
+                        try:
+                            uid = int(user_match.group(1))
+                            import pwd
+                            current_user = pwd.getpwuid(uid).pw_name
+                        except:
+                            current_user = user_match.group(1)
+                
+                # When we find SYSCALL, we have all the info we need
+                if "SYSCALL" in line and current_command:
+                    # Create event details
+                    details = {
+                        "message": f"Command executed: {current_command}",
+                        "username": current_user or "unknown",
+                        "cmdline": current_command,
+                        "source": "auditd",
+                    }
+                    
+                    # Determine if this is a suspicious command
+                    is_suspicious = current_command in self.suspicious_commands
+                    level = "WARNING" if is_suspicious else "INFO"
+                    event_type = "SUSPICIOUS_COMMAND" if is_suspicious else "PROCESS_CREATED"
+                    
+                    # Log the command execution
+                    self.logger.log_event(event_type, details, level=level)
+                    
+                    # Reset tracking variables
+                    current_command = None
+                    current_user = None
+                    
+        except Exception as e:
+            self.logger.log_event(
+                "MONITOR_ERROR",
+                {"message": f"Error in process tracer: {str(e)}"},
                 level="ERROR"
             )
     

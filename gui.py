@@ -1,9 +1,44 @@
+# File: gui.py
+# Security Event Logger - GUI Launcher
+# Initializes and launches the graphical user interface
 import sys
 import os
+import subprocess
 from PyQt5.QtWidgets import QApplication
 from main_window import MainWindow
 from security_logger import SecurityEventLogger
 import logging
+
+# Near the top of gui.py, before creating the QApplication
+if os.geteuid() == 0:  # If running as root
+    # Try to fix display permissions for X11 or Wayland
+    display = os.environ.get('DISPLAY')
+    wayland_display = os.environ.get('WAYLAND_DISPLAY')
+    
+    # Only try X11 if QT_QPA_PLATFORM is not explicitly set to something else
+    if display and os.environ.get('QT_QPA_PLATFORM') != 'wayland':
+        try:
+            # For X11 sessions
+            subprocess.call(['xhost', '+local:root'])
+            print("X11 access granted to root user")
+        except Exception as e:
+            print(f"Warning: Could not set X11 permissions: {e}")
+    
+    # Only try Wayland if we're explicitly using it or if no X11
+    if wayland_display and (not display or os.environ.get('QT_QPA_PLATFORM') == 'wayland'):
+        # For Wayland sessions
+        try:
+            # Make sure XDG_RUNTIME_DIR is properly set
+            if 'XDG_RUNTIME_DIR' not in os.environ:
+                os.environ['XDG_RUNTIME_DIR'] = f"/run/user/{os.getuid()}"
+                print("Set XDG_RUNTIME_DIR for Wayland session")
+            
+            # ONLY set QT_QPA_PLATFORM if it's not already set
+            if 'QT_QPA_PLATFORM' not in os.environ:
+                os.environ['QT_QPA_PLATFORM'] = 'wayland'
+                print("Set QT to use Wayland platform")
+        except Exception as e:
+            print(f"Warning: Could not set up Wayland environment: {e}")
 
 def main():
     # Determine the appropriate log file location based on permissions

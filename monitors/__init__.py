@@ -1,3 +1,5 @@
+# File: __init__.py
+# Security Event Logger - Monitors Package Initialization
 # Import all monitor classes to make them available when importing the monitors package
 from .base_monitor import BaseMonitor
 from .auth_log_monitor import AuthLogMonitor

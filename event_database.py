@@ -1,3 +1,6 @@
+# File: event_database.py
+# Security Event Logger - Database Module
+# Thread-safe SQLite event storage and retrieval
 import sqlite3
 import json
 import time
@@ -90,22 +93,54 @@ class EventDatabase:
             print(f"Database error: {e}")
             return False
 
+    def add_events_batch(self, events: List[Dict]) -> bool:
+        """Add multiple events in a single transaction for better performance."""
+        if not events:
+            return True
+            
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("BEGIN TRANSACTION")
+                
+                for event in events:
+                    # Convert JSON details to string if it's not already
+                    details = event.get('details', '{}')
+                    if isinstance(details, dict):
+                        details = json.dumps(details)
+                        
+                    cursor.execute('''
+                    INSERT INTO events 
+                    (event_id, timestamp, type, user, computer, source, description, details)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        event.get('event_id'),
+                        event.get('timestamp'),
+                        event.get('type'),
+                        event.get('user'),
+                        event.get('computer'),
+                        event.get('source'),
+                        event.get('description'),
+                        details
+                    ))
+                
+                cursor.execute("COMMIT")
+                return True
+        except Exception as e:
+            print(f"Database batch error: {e}")
+            try:
+                self.conn.rollback()
+            except:
+                pass
+            return False
+
     def get_recent_events(self, limit: int = 1000) -> List[Dict]:
         with self.lock:  # Use thread lock for safety
             cursor = self.conn.cursor()
             
-            # Get existing columns to build a dynamic query
-            cursor.execute("PRAGMA table_info(events)")
-            existing_columns = [row[1] for row in cursor.fetchall()]
-            
-            # Build columns list based on what exists
-            columns = ["timestamp", "event_id", "type", "user", "computer", "source", "description"]
-            if "details" in existing_columns:
-                columns.append("details")
-                
-            # Construct the query dynamically with a limit
-            query = f'''
-                SELECT {', '.join(columns)}
+            # Only select needed columns (avoid details unless necessary)
+            query = '''
+                SELECT timestamp, event_id, type, user, computer, source, description
                 FROM events
                 ORDER BY timestamp DESC
                 LIMIT ?'''
@@ -115,7 +150,7 @@ class EventDatabase:
             # Get column names from cursor description
             result_columns = [col[0] for col in cursor.description]
             
-            # Convert rows to dictionaries properly
+            # Convert rows to dictionaries efficiently
             return [dict(zip(result_columns, row)) for row in cursor.fetchall()]
     
     def search_events(self, query, params):
@@ -128,3 +163,31 @@ class EventDatabase:
         
         # Convert rows to dictionaries
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+    def get_paginated_events(self, page=1, per_page=100, filters=None):
+        """Get events with pagination support"""
+        offset = (page - 1) * per_page
+        
+        with self.lock:
+            cursor = self.conn.cursor()
+            
+            # Base query
+            query = "SELECT * FROM events"
+            params = []
+            
+            # Add filters if provided
+            if filters:
+                query += " WHERE " + filters[0]
+                params.extend(filters[1])
+            
+            # Add order and pagination
+            query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+            params.extend([per_page, offset])
+            
+            cursor.execute(query, params)
+            
+            # Get column names from cursor description
+            columns = [col[0] for col in cursor.description]
+            
+            # Convert rows to dictionaries
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
