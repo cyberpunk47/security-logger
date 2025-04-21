@@ -154,61 +154,87 @@ class ProcessMonitor(BaseMonitor):
                 bufsize=1
             )
             
-            # Variables to track current command
-            current_command = None
-            current_user = None
+            # Variables to track current command parsing
+            current_entry = {}
             
             for line in iter(process.stdout.readline, ""):
                 if not self.running:
                     break
                     
-                # Look for command in raw format
-                if "exe=" in line:
-                    # Extract executable path
+                # Track different command identification methods
+                if "type=" in line:
+                    # Start of new audit entry
+                    if current_entry and "cmd" in current_entry:
+                        # Process the completed entry
+                        self._log_command_from_audit(current_entry)
+                    current_entry = {}
+                
+                # Look for direct command name (most reliable)
+                if "proctitle=" in line:
+                    match = re.search(r'proctitle=([0-9A-F]+)', line)
+                    if match:
+                        try:
+                            # Convert hex to ASCII to get the full command
+                            hex_cmd = match.group(1)
+                            cmd_bytes = bytes.fromhex(hex_cmd)
+                            cmd_str = cmd_bytes.decode('utf-8', errors='replace')
+                            # First word is the command
+                            current_entry["cmd"] = cmd_str.split()[0]
+                            current_entry["cmdline"] = cmd_str
+                        except Exception:
+                            pass
+                
+                # Fallback to exe path if proctitle isn't usable
+                if "exe=" in line and "cmd" not in current_entry:
                     exe_match = re.search(r'exe="([^"]+)"', line)
                     if exe_match:
                         # Get just the command name from path
-                        current_command = os.path.basename(exe_match.group(1))
+                        current_entry["cmd"] = os.path.basename(exe_match.group(1))
                 
-                # Extract username 
+                # Get username
                 if "auid=" in line:
                     user_match = re.search(r'auid=(\d+)', line)
                     if user_match:
                         try:
                             uid = int(user_match.group(1))
                             import pwd
-                            current_user = pwd.getpwuid(uid).pw_name
+                            current_entry["user"] = pwd.getpwuid(uid).pw_name
                         except:
-                            current_user = user_match.group(1)
-                
-                # When we find SYSCALL, we have all the info we need
-                if "SYSCALL" in line and current_command:
-                    # Create event details
-                    details = {
-                        "message": f"Command executed: {current_command}",
-                        "username": current_user or "unknown",
-                        "cmdline": current_command,
-                        "source": "auditd",
-                    }
-                    
-                    # Determine if this is a suspicious command
-                    is_suspicious = current_command in self.suspicious_commands
-                    level = "WARNING" if is_suspicious else "INFO"
-                    event_type = "SUSPICIOUS_COMMAND" if is_suspicious else "PROCESS_CREATED"
-                    
-                    # Log the command execution
-                    self.logger.log_event(event_type, details, level=level)
-                    
-                    # Reset tracking variables
-                    current_command = None
-                    current_user = None
-                    
+                            current_entry["user"] = user_match.group(1)
+                        
         except Exception as e:
             self.logger.log_event(
                 "MONITOR_ERROR",
                 {"message": f"Error in process tracer: {str(e)}"},
                 level="ERROR"
             )
+    
+    def _log_command_from_audit(self, entry):
+        """Log a command execution from parsed audit data."""
+        if not entry.get("cmd"):
+            return
+            
+        # Clean up the command name - handle common executables properly
+        cmd = entry.get("cmd")
+        # Extract actual command name from path if needed
+        if "/" in cmd:
+            cmd = os.path.basename(cmd)
+        
+        # Create event details
+        details = {
+            "message": f"Command executed: {cmd}",
+            "username": entry.get("user", "unknown"),
+            "cmdline": entry.get("cmdline", cmd),
+            "source": "auditd",
+        }
+        
+        # Determine if this is a suspicious command
+        is_suspicious = cmd in self.suspicious_commands
+        level = "WARNING" if is_suspicious else "INFO"
+        event_type = "SUSPICIOUS_COMMAND" if is_suspicious else "PROCESS_CREATED"
+        
+        # Log the command execution
+        self.logger.log_event(event_type, details, level=level)
     
     def get_processes(self):
         """Get current processes with improved detail capture."""

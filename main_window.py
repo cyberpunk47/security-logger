@@ -64,33 +64,37 @@ class EventTableModel(QAbstractTableModel):
                 return ""
         elif role == Qt.BackgroundRole:
             try:
-                # Only color rows based on event type/level (not specific cells)
-                event_level = str(self._data.iloc[row, 4]) if len(self._data) > row else ""
+                # Find the level column (column 4 is "level")
+                event_level = ""
+                # Try to get level directly from data
+                if "level" in self._data.columns:
+                    event_level = str(self._data["level"].iloc[row])
+                # If not available as a column, try to determine from type
+                elif len(self._data.columns) > 2:  # Make sure we have a type column
+                    event_type = str(self._data["type"].iloc[row]).upper()
+                    # Map event type to level
+                    if "ERROR" in event_type or "FAIL" in event_type:
+                        event_level = "ERROR"
+                    elif "WARNING" in event_type or "ALERT" in event_type:
+                        event_level = "WARNING"
+                    elif "AUDIT" in event_type:
+                        event_level = "SECURITY_AUDIT"
+                    else:
+                        event_level = "INFORMATION"
                 
-                # Map common event levels to our color scheme
+                # Map to color key
                 color_key = event_level.upper()
                 if "INFO" in color_key:
                     color_key = "INFORMATION"
-                elif "WARN" in color_key:
-                    color_key = "WARNING"
-                elif "ERROR" in color_key or "FAIL" in color_key:
-                    color_key = "ERROR"
-                elif "AUDIT" in color_key:
-                    color_key = "SECURITY_AUDIT"
-                elif "ALERT" in color_key:
-                    color_key = "SECURITY_ALERT"
                 
-                # Get appropriate color with fallback based on theme
+                # Get color based on key or theme default
                 color = self._colors.get(color_key)
                 if color:
-                    # If we have a matching color, return it
                     return color
                 else:
-                    # Otherwise return theme-appropriate default
                     return QColor(45, 45, 45) if self._theme == "Dark" else QColor(255, 255, 255)
             except Exception as e:
                 print(f"Color error: {e}")
-                # Return default color based on theme if there's any error
                 return QColor(45, 45, 45) if self._theme == "Dark" else QColor(255, 255, 255)
         elif role == Qt.ForegroundRole:
             # Text color based on theme
